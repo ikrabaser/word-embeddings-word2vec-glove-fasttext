@@ -23,6 +23,8 @@ Türkçe | [English](#word-embeddings-word2vec-glove-and-fasttext)
 | [`glove_el_hesabi.py`](glove_el_hesabi.py) | GloVe hesabını adım adım ekrana yazar |
 | [`fasttext.py`](fasttext.py) | n-gram çıkarma, kelime vektörü, FNV-1a hash kovaları, ortak n-gram |
 | [`fasttext_el_hesabi.py`](fasttext_el_hesabi.py) | fastText hesabını adım adım ekrana yazar |
+| [`degerlendirme.py`](degerlendirme.py) | analoji (vektör aritmetiği), Spearman sıra korelasyonu, çift değerlendirme |
+| [`degerlendirme_el_hesabi.py`](degerlendirme_el_hesabi.py) | analoji ve Spearman hesabını adım adım ekrana yazar |
 | [`gorseller_uret.py`](gorseller_uret.py) | `gorseller/` altındaki PNG'leri üretir |
 | [`test_el_hesaplari.py`](test_el_hesaplari.py) | README'deki sayıların kodla tuttuğunu denetler |
 
@@ -34,12 +36,13 @@ pip install -r requirements.txt
 python word2vec_el_hesabi.py
 python glove_el_hesabi.py
 python fasttext_el_hesabi.py
+python degerlendirme_el_hesabi.py
 
 python gorseller_uret.py      # görselleri yeniden üretir
 python test_el_hesaplari.py   # ya da: pytest
 ```
 
-Bu README'deki bütün sayılar yukarıdaki scriptlerin çıktısıdır. `gensim` kuruluysa test dosyası fastText n-gram ve hash değerlerini gensim ile de karşılaştırır (zorunlu değil).
+Bu README'deki bütün sayılar yukarıdaki scriptlerin çıktısıdır. `gensim` kuruluysa test dosyası fastText n-gram ve hash değerlerini ve analoji sonuçlarını gensim ile, `scipy` kuruluysa Spearman sonuçlarını scipy ile de karşılaştırır (ikisi de zorunlu değil).
 
 ---
 
@@ -395,7 +398,141 @@ Eklemeli dillerde ekler (`-ler`, `-imiz`, `-den`) hem çok sık hem anlamlı par
 
 ---
 
-## 5. Üç yöntemin özeti
+## 5. Değerlendirme: analoji ve Spearman korelasyonu
+
+Dosyalar: [`degerlendirme.py`](degerlendirme.py), [`degerlendirme_el_hesabi.py`](degerlendirme_el_hesabi.py)
+
+Eğitilmiş gömmelerin iyi olup olmadığı iki yolla ölçülür:
+
+| Ölçüm | Soru | Nasıl? |
+|---|---|---|
+| **Analoji** | Vektörlerde anlam ilişkileri bir **yön** olarak saklanıyor mu? | Vektör aritmetiği + kosinüs |
+| **Spearman ρ** | Modelin benzerlik **sıralaması**, insanların sıralamasıyla uyuşuyor mu? | İnsan puanları ile kosinüsün sıra korelasyonu |
+
+> Bu bölümdeki vektörler ve insan puanları **örnek (uydurma) değerlerdir**; amaç hesabın nasıl yapıldığını göstermektir.
+
+### 5.1 Analoji: `a : b :: c : ?`
+
+`ev : evler :: kitap : ?` sorusu "ev'in çoğulu evler ise kitap'ın çoğulu nedir?" demektir. Cevap vektörlerle şöyle bulunur:
+
+```
+sorgu = b − a + c          ->  sözlükte kosinüsü sorguya EN YAKIN kelime (girdiler hariç)
+```
+
+Mantık: `evler − ev` farkı "çoğul yapma" **yönünü** verir. Bu yönü `kitap`'a eklersek `kitaplar`'ın yakınına varırız.
+
+| Kelime | Vektör (boyut 2) |
+|---|---|
+| ev | (2, 1) |
+| evler | (2, 3) |
+| kitap | (5, 1) |
+| kitaplar | (4.5, 3.5) |
+| masa | (−1, 2) |
+| kalem | (6, 0.5) |
+
+```
+evler − ev          = (2, 3) − (2, 1) = (0, 2)        <- "çoğul yapma" yönü
+evler − ev + kitap  = (0, 2) + (5, 1) = (5, 3)        <- sorgu
+```
+
+![Analoji](gorseller/analoji_vektor_aritmetigi.png)
+
+Her kelimenin sorguya kosinüs benzerliği, `cos(x, q) = x·q / (|x| |q|)`, `|q| = √(5² + 3²) = 5.8310`:
+
+| Kelime | `x·q` | `\|x\|` | cos |
+|---|---|---|---|
+| ev | 13.00 | 2.2361 | **0.9971** |
+| kitaplar | 33.00 | 5.7009 | **0.9927** |
+| kitap | 28.00 | 5.0990 | 0.9417 |
+| evler | 19.00 | 3.6056 | 0.9037 |
+| kalem | 31.50 | 6.0208 | 0.8973 |
+| masa | 1.00 | 2.2361 | 0.0767 |
+
+**Girdi kelimeleri (`ev`, `evler`, `kitap`) sonuçtan atılırsa:**
+
+```
+1. kitaplar  0.9927   <- cevap
+2. kalem     0.8973
+3. masa      0.0767
+```
+
+#### Tuzak: girdi kelimeleri neden atılıyor?
+
+Atmazsak ilk sıra `ev` (0.9971) olur, `kitaplar`'ı (0.9927) geçer. Sorgu girdilerden birine hâlâ çok yakın kaldığı için atılmazsa ilk sıra çoğu zaman bir **girdi kelimesi** çıkar (Nissim vd., 2020). gensim bu yüzden `most_similar` sonucundan girdileri çıkarır.
+
+#### gensim biçimi: normalize
+
+gensim, `b − a + c` işleminden önce **her vektörü birim uzunluğa getirir** (uzun vektörler sorguyu domine etmesin diye). Aynı örnekte:
+
+```
+1. kitaplar  0.9972
+2. kalem     0.7941
+3. masa      0.2694
+```
+
+Sıra aynı kaldı ama kosinüs değerleri değişti. `normalize=True` seçeneği gensim'in `most_similar` çıktısıyla birebir aynı sıra ve kosinüsü verir (testte denetlenir).
+
+Gerçekte vektörler 100–300 boyutludur ve sonuç tam eşit çıkmaz; yalnızca **en yakın** olan seçilir.
+
+### 5.2 Spearman sıra korelasyonu
+
+Modelin kosinüsü (−1…1 arası) ile insan puanı (örn. 0…10 arası) farklı ölçeklerdedir; doğrudan karşılaştırılamaz. Spearman **yalnızca sıraya** bakar: "insanlar hangi çifti daha benzer buluyorsa model de öyle sıralıyor mu?"
+
+Adımlar:
+
+1. İnsan puanlarını ve kosinüsleri ayrı ayrı sırala (1 = en benzer).
+2. Her çift için sıra farkı `d`'yi bul.
+3. `ρ = 1 − 6·Σd² / ( n (n² − 1) )`
+
+| Çift | insan | kosinüs | sıra (insan) | sıra (model) | d | d² |
+|---|---|---|---|---|---|---|
+| araba – otomobil | 9.2 | 0.88 | 1 | 1 | 0 | 0 |
+| kedi – köpek | 7.0 | 0.79 | 2 | 3 | −1 | 1 |
+| kahve – çay | 6.5 | 0.81 | 3 | 2 | +1 | 1 |
+| sıcak – ılık | 6.0 | 0.62 | 4 | 4 | 0 | 0 |
+| kahve – fincan | 3.1 | 0.46 | 5 | 5 | 0 | 0 |
+| masa – koştu | 0.4 | 0.05 | 6 | 6 | 0 | 0 |
+
+```
+Σd² = 2,   n = 6
+ρ = 1 − 6·2 / (6·35) = 1 − 12/210 = 0.9429
+```
+
+Aynı sonuç, sıralar üzerinde Pearson korelasyonu alınarak da bulunur (0.9429). Spearman'ın tanımı budur; yukarıdaki kısa formül bunun eşitlik olmayan durumdaki halidir.
+
+![Spearman sıraları](gorseller/spearman_siralar.png)
+
+**Yorum:** `+1` tam uyum, `0` ilişki yok, `−1` tamamen ters sıralama.
+
+**Ölçekten bağımsızdır:** kosinüsleri 10 ile çarpmak ya da karesini almak sırayı bozmadığı için ρ'yu değiştirmez (ikisinde de 0.9429). Model sırayı tamamen ters çevirirse ρ = −1 çıkar.
+
+#### Eşit değerler: ortalama sıra
+
+İki değer eşitse ikisi de sıraların **ortalamasını** alır. `[3, 7, 7, 1]` için sıralar `[3, 1.5, 1.5, 4]` (7 ve 7, 1. ve 2. sıraya denk gelir: (1 + 2) / 2 = 1.5). Eşitlik varsa `1 − 6Σd²/(n(n²−1))` kısa formülü yaklaşık kalır; doğru sonuç sıralar üzerinde Pearson'dan gelir. Örnekte insan = `[3, 7, 7, 1]`, model = `[2, 9, 8, 1]`: kısa formül 0.9500, Pearson (doğru) **0.9487**. Kod bu yüzden Pearson yolunu kullanır; sonuç scipy'ın `spearmanr`'ı ile birebir aynıdır.
+
+### 5.3 AnlamVer ve kapsam
+
+AnlamVer, Türkçe için hazırlanmış bir kelime benzerliği veri kümesidir (Ercan ve Yıldız, 2018): **500 kelime çifti**, 12 kişi puanlamıştır. Her çiftin **ayrı bir benzerlik ve ilişkililik** puanı vardır (`kahve–fincan` ilişkili ama benzer değildir; fincan bir kap, kahve bir içecektir). Değerlendirme yukarıdaki Spearman hesabıdır: insan puanlarının sırası ile modelin kosinüs sırası.
+
+**Kapsam:** Çiftin kelimelerinden birinin vektörü yoksa çift değerlendirilemez ve atlanır. word2vec ve GloVe sözlükte olmayan kelime için vektör üretemez; fastText n-gram'lardan üretir. Kodda `cift_degerlendir`, vektörü bulunamayan çiftleri atlayıp kaç çiftin kullanıldığını döndürür:
+
+| Model | Değerlendirilebilen çift |
+|---|---|
+| word2vec benzeri (sözlük araması) | 4 / 5 |
+| fastText benzeri (n-gram toplamı) | 5 / 5 |
+
+Beşinci çiftte yazım hatalı `bilgisyar` var: sözlükte olmadığı için word2vec bu çifti atlar, fastText n-gram'larından vektör üretip çifti değerlendirir. (Bu örnekte vektörler rastgeledir; yalnızca **kapsam** farkı gösterilir, ρ değerleri anlamsızdır.)
+
+### 5.4 Dikkat edilecekler
+
+- **Analojide girdi kelimeleri atılır.** Atılmazsa sonuç çoğu zaman girdinin kendisi olur.
+- **Spearman yalnızca sırayı ölçer.** Modelin kosinüs değerlerinin büyüklüğü hakkında bir şey söylemez.
+- **Benzerlik ≠ ilişkililik.** Zıt anlamlılar (sıcak–soğuk) aynı bağlamlarda geçtiği için dağılımsal yöntemler onları yakın bulur; `kahve–fincan` gibi ilişkili ama benzer olmayan çiftler de benzerlik puanında karışır.
+- **Kapsam önemlidir.** İki model farklı sayıda çift üzerinden değerlendirildiyse ρ değerleri doğrudan karşılaştırılamaz.
+
+---
+
+## 6. Üç yöntemin özeti
 
 | | word2vec | GloVe | fastText |
 |---|---|---|---|
@@ -441,6 +578,8 @@ A **from-scratch, step-by-step hand calculation** of three well-known word embed
 | [`glove_el_hesabi.py`](glove_el_hesabi.py) | prints the GloVe hand calculation |
 | [`fasttext.py`](fasttext.py) | n-gram extraction, word vector, FNV-1a hash buckets, shared n-grams |
 | [`fasttext_el_hesabi.py`](fasttext_el_hesabi.py) | prints the fastText hand calculation |
+| [`degerlendirme.py`](degerlendirme.py) | analogy (vector arithmetic), Spearman rank correlation, pair evaluation |
+| [`degerlendirme_el_hesabi.py`](degerlendirme_el_hesabi.py) | prints the analogy and Spearman hand calculation |
 | [`gorseller_uret.py`](gorseller_uret.py) | generates the PNGs under `gorseller/` |
 | [`test_el_hesaplari.py`](test_el_hesaplari.py) | checks that the numbers below match the code |
 
@@ -452,12 +591,13 @@ pip install -r requirements.txt
 python word2vec_el_hesabi.py
 python glove_el_hesabi.py
 python fasttext_el_hesabi.py
+python degerlendirme_el_hesabi.py
 
 python gorseller_uret.py      # regenerate the figures
 python test_el_hesaplari.py   # or: pytest
 ```
 
-Every number in this README is the output of these scripts. If `gensim` is installed, the tests also cross-check fastText n-grams and hash buckets against gensim (optional).
+Every number in this README is the output of these scripts. If `gensim` is installed, the tests also cross-check fastText n-grams, hash buckets and analogy results against gensim; if `scipy` is installed, Spearman results are checked against scipy (both optional).
 
 ---
 
@@ -753,7 +893,141 @@ In agglutinative languages suffixes (`-ler`, `-imiz`, `-den`) are both frequent 
 
 ---
 
-## 5. Summary
+## 5. Evaluation: analogy and Spearman correlation
+
+Files: [`degerlendirme.py`](degerlendirme.py), [`degerlendirme_el_hesabi.py`](degerlendirme_el_hesabi.py)
+
+Trained embeddings are checked in two common ways:
+
+| Measure | Question | How? |
+|---|---|---|
+| **Analogy** | Are semantic relations stored as a **direction** in the vector space? | Vector arithmetic + cosine |
+| **Spearman ρ** | Does the model's similarity **ranking** agree with human rankings? | Rank correlation of human scores and cosines |
+
+> The vectors and human scores in this section are **made-up example values**; the goal is to show how the calculation works.
+
+### 5.1 Analogy: `a : b :: c : ?`
+
+`ev : evler :: kitap : ?` asks: "if the plural of *ev* (house) is *evler*, what is the plural of *kitap* (book)?" The answer comes from vectors:
+
+```
+query = b − a + c          ->  the word whose cosine to the query is HIGHEST (inputs excluded)
+```
+
+Idea: `evler − ev` gives the "make plural" **direction**. Adding it to `kitap` lands near `kitaplar`.
+
+| Word | Vector (size 2) |
+|---|---|
+| ev | (2, 1) |
+| evler | (2, 3) |
+| kitap | (5, 1) |
+| kitaplar | (4.5, 3.5) |
+| masa | (−1, 2) |
+| kalem | (6, 0.5) |
+
+```
+evler − ev          = (2, 3) − (2, 1) = (0, 2)        <- "make plural" direction
+evler − ev + kitap  = (0, 2) + (5, 1) = (5, 3)        <- query
+```
+
+![Analogy](gorseller/analoji_vektor_aritmetigi.png)
+
+Cosine of each word with the query, `cos(x, q) = x·q / (|x| |q|)`, `|q| = √(5² + 3²) = 5.8310`:
+
+| Word | `x·q` | `\|x\|` | cos |
+|---|---|---|---|
+| ev | 13.00 | 2.2361 | **0.9971** |
+| kitaplar | 33.00 | 5.7009 | **0.9927** |
+| kitap | 28.00 | 5.0990 | 0.9417 |
+| evler | 19.00 | 3.6056 | 0.9037 |
+| kalem | 31.50 | 6.0208 | 0.8973 |
+| masa | 1.00 | 2.2361 | 0.0767 |
+
+**With the input words (`ev`, `evler`, `kitap`) excluded:**
+
+```
+1. kitaplar  0.9927   <- answer
+2. kalem     0.8973
+3. masa      0.0767
+```
+
+#### Pitfall: why are the input words excluded?
+
+If we keep them, `ev` (0.9971) comes first and beats `kitaplar` (0.9927). The query stays very close to one of the inputs, so without exclusion the top result is often an **input word** (Nissim et al., 2020). That is why gensim removes the inputs from the `most_similar` result.
+
+#### gensim style: normalization
+
+Before computing `b − a + c`, gensim **normalizes every vector to unit length** (so long vectors do not dominate the query). On the same example:
+
+```
+1. kitaplar  0.9972
+2. kalem     0.7941
+3. masa      0.2694
+```
+
+The order is unchanged but the cosine values differ. With `normalize=True` the code gives exactly the same ranking and cosines as gensim's `most_similar` (checked in the tests).
+
+Real vectors have 100–300 dimensions and the result is not exact; only the **closest** word is picked.
+
+### 5.2 Spearman rank correlation
+
+A model's cosine (−1…1) and a human score (e.g. 0…10) live on different scales and cannot be compared directly. Spearman looks **only at ranks**: "does the model order pairs the way humans do?"
+
+Steps:
+
+1. Rank human scores and cosines separately (1 = most similar).
+2. For each pair compute the rank difference `d`.
+3. `ρ = 1 − 6·Σd² / ( n (n² − 1) )`
+
+| Pair | human | cosine | rank (human) | rank (model) | d | d² |
+|---|---|---|---|---|---|---|
+| araba – otomobil (car) | 9.2 | 0.88 | 1 | 1 | 0 | 0 |
+| kedi – köpek (cat–dog) | 7.0 | 0.79 | 2 | 3 | −1 | 1 |
+| kahve – çay (coffee–tea) | 6.5 | 0.81 | 3 | 2 | +1 | 1 |
+| sıcak – ılık (hot–warm) | 6.0 | 0.62 | 4 | 4 | 0 | 0 |
+| kahve – fincan (coffee–cup) | 3.1 | 0.46 | 5 | 5 | 0 | 0 |
+| masa – koştu (table–ran) | 0.4 | 0.05 | 6 | 6 | 0 | 0 |
+
+```
+Σd² = 2,   n = 6
+ρ = 1 − 6·2 / (6·35) = 1 − 12/210 = 0.9429
+```
+
+Computing Pearson correlation on the ranks gives the same value (0.9429). That is the actual definition of Spearman; the short formula above is its form when there are no ties.
+
+![Spearman ranks](gorseller/spearman_siralar.png)
+
+**Reading it:** `+1` perfect agreement, `0` no relation, `−1` completely reversed ranking.
+
+**Scale-free:** multiplying the cosines by 10 or squaring them keeps the ranking, so ρ does not change (0.9429 in both cases). If the model reverses the ranking completely, ρ = −1.
+
+#### Ties: average rank
+
+Tied values both receive the **average** of their ranks. For `[3, 7, 7, 1]` the ranks are `[3, 1.5, 1.5, 4]` (the two 7s fill ranks 1 and 2: (1 + 2) / 2 = 1.5). With ties the short formula `1 − 6Σd²/(n(n²−1))` is only approximate; the correct value comes from Pearson on the ranks. With human = `[3, 7, 7, 1]` and model = `[2, 9, 8, 1]`: short formula 0.9500, Pearson (correct) **0.9487**. The code uses the Pearson route, and its result is identical to scipy's `spearmanr`.
+
+### 5.3 AnlamVer and coverage
+
+AnlamVer is a word-similarity dataset built for Turkish (Ercan and Yıldız, 2018): **500 word pairs** scored by 12 people. Each pair has a **separate similarity and relatedness** score (`kahve–fincan`, coffee–cup, is related but not similar; a cup is a container, coffee a drink). The evaluation is the Spearman calculation above: human ranking versus the model's cosine ranking.
+
+**Coverage:** if a pair has a word without a vector, it cannot be evaluated and is skipped. word2vec and GloVe cannot produce a vector for an out-of-vocabulary word; fastText builds one from n-grams. In the code, `cift_degerlendir` skips pairs whose vectors are missing and returns how many pairs were used:
+
+| Model | Pairs evaluated |
+|---|---|
+| word2vec-like (dictionary lookup) | 4 / 5 |
+| fastText-like (n-gram sum) | 5 / 5 |
+
+The fifth pair contains the misspelt `bilgisyar`: it is not in the vocabulary, so word2vec skips the pair, while fastText builds a vector from its n-grams and evaluates it. (The vectors are random in this example; it only shows the difference in **coverage**, the ρ values are meaningless.)
+
+### 5.4 Things to watch
+
+- **Input words are excluded in analogies.** Otherwise the result is often the input itself.
+- **Spearman measures only the ordering.** It says nothing about the magnitude of the cosines.
+- **Similarity ≠ relatedness.** Antonyms (hot–cold) occur in the same contexts, so distributional methods place them close; related but not similar pairs such as `kahve–fincan` also blur similarity scores.
+- **Coverage matters.** If two models were evaluated on different numbers of pairs, their ρ values cannot be compared directly.
+
+---
+
+## 6. Summary
 
 | | word2vec | GloVe | fastText |
 |---|---|---|---|
