@@ -11,6 +11,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
+import degerlendirme as dg
+import degerlendirme_el_hesabi as dgh
 import fasttext as ft
 import glove
 import word2vec as w2v
@@ -174,7 +176,75 @@ def gorsel_ortak_ngram():
     kaydet(fig, "fasttext_ortak_ngram.png")
 
 
+def gorsel_analoji():
+    """Analoji: 'çoğul yapma' yönü ev -> evler, kitap'a eklenince kitaplar'ın yakınına varılıyor."""
+    V = dgh.VEKTORLER
+    sorgu = dg.analoji_sorgusu(V["ev"], V["evler"], V["kitap"])
+
+    fig, ax = plt.subplots(figsize=(7, 4.6))
+    ax.grid(True)
+    ok = dict(arrowstyle="-|>", linewidth=2, shrinkA=7, shrinkB=7, mutation_scale=14)
+    ax.annotate("", xy=V["evler"], xytext=V["ev"], arrowprops=dict(color=GRI, **ok))
+    ax.annotate("", xy=sorgu, xytext=V["kitap"], arrowprops=dict(color=VURGU, **ok))
+    ax.text(1.55, 2.0, "evler − ev\n(çoğul yönü)", ha="right", va="center", color=GRI, fontsize=9)
+    ax.text(5.45, 2.1, "aynı yön\nkitap'a eklenir", ha="left", va="center", color=VURGU, fontsize=9)
+
+    for kelime, v in V.items():
+        ax.scatter(*v, color="#1F2937", s=36, zorder=3, edgecolor="white", linewidth=1.2)
+    etiket = {"ev": (-0.1, -0.5), "evler": (-0.1, 0.3), "kitap": (0.0, -0.5), "kitaplar": (-0.3, 0.38),
+              "masa": (0.15, 0.2), "kalem": (0.1, -0.5)}
+    for kelime, (dx, dy) in etiket.items():
+        v = V[kelime]
+        ax.text(v[0] + dx, v[1] + dy, kelime, color="#1F2937", fontsize=9.5)
+
+    ax.scatter(*sorgu, marker="x", color=IKINCIL, s=70, linewidths=2.2, zorder=4)
+    ax.text(sorgu[0] + 0.2, sorgu[1] - 0.05, "sorgu = (5, 3)", color=IKINCIL, fontsize=9.5, va="center")
+
+    ax.set_xlim(-2, 7.5)
+    ax.set_ylim(-0.5, 4.5)
+    ax.set_xlabel("1. boyut")
+    ax.set_ylabel("2. boyut")
+    ax.set_title("Analoji: ev : evler :: kitap : ?  →  evler − ev + kitap", loc="left",
+                 color="#111827", fontsize=11)
+    kaydet(fig, "analoji_vektor_aritmetigi.png")
+
+
+def gorsel_spearman():
+    """Spearman: insan sırası ile modelin kosinüs sırası; köşegen = tam uyum."""
+    ciftler = dgh.CIFTLER
+    adlar = [c[0] for c in ciftler]
+    s_insan = dg.siralar([c[1] for c in ciftler])
+    s_model = dg.siralar([c[2] for c in ciftler])
+    rho, _, _ = dg.spearman_d2([c[1] for c in ciftler], [c[2] for c in ciftler])
+    n = len(ciftler)
+
+    fig, ax = plt.subplots(figsize=(7, 4.8))
+    ax.plot([0.4, n + 0.6], [0.4, n + 0.6], color=GRI, linewidth=1.2, linestyle=(0, (4, 3)), zorder=2)
+    ayni = [x == y for x, y in zip(s_insan, s_model)]
+    for ad, x, y, a in zip(adlar, s_insan, s_model, ayni):
+        ax.scatter(x, y, s=60, color=VURGU if a else IKINCIL, zorder=3, edgecolor="white", linewidth=1.5)
+        if x <= 3 and y <= x:   # etiket noktanın sağ-altına
+            ax.text(x + 0.13, y - 0.2, ad, fontsize=9, color="#1F2937", ha="left", va="center")
+        else:        # etiket noktanın sol-üstüne
+            ax.text(x - 0.13, y + 0.2, ad, fontsize=9, color="#1F2937", ha="right", va="center")
+    ax.scatter([], [], s=60, color=VURGU, label="sıra aynı")
+    ax.scatter([], [], s=60, color=IKINCIL, label="sıra farklı")
+    ax.plot([], [], color=GRI, linewidth=1.2, linestyle=(0, (4, 3)), label="köşegen = tam uyum")
+    ax.legend(frameon=False, loc="lower right", fontsize=9)
+    ax.set_xlim(0.4, n + 0.6)
+    ax.set_ylim(0.4, n + 0.8)
+    ax.set_xticks(range(1, n + 1))
+    ax.set_yticks(range(1, n + 1))
+    ax.set_xlabel("insan sırası (1 = en benzer)")
+    ax.set_ylabel("modelin kosinüs sırası (1 = en benzer)")
+    ax.set_title(f"Spearman ρ = {rho:.4f}: yalnızca 2 çiftin sırası yer değiştirmiş", loc="left",
+                 color="#111827", fontsize=11)
+    kaydet(fig, "spearman_siralar.png")
+
+
 if __name__ == "__main__":
+    gorsel_analoji()
+    gorsel_spearman()
     gorsel_kayip()
     gorsel_uc_dort()
     gorsel_glove_agirlik()

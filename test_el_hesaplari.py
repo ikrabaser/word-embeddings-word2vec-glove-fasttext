@@ -6,6 +6,7 @@ gensim kuruluysa fastText n-gram ve hash değerleri gensim ile de karşılaştı
 """
 import numpy as np
 
+import degerlendirme as dg
 import fasttext as ft
 import glove
 import word2vec as w2v
@@ -120,6 +121,74 @@ def test_oov_icin_vektor_uretilir():
 def test_kosinus_uzunluktan_bagimsiz():
     a = np.array([1.0, 2.0])
     assert abs(kosinus_benzerligi(a, 5 * a) - 1.0) < 1e-12
+
+
+# ------------------------------ değerlendirme --------------------------------
+VEK = {
+    "ev": np.array([2.0, 1.0]), "evler": np.array([2.0, 3.0]), "kitap": np.array([5.0, 1.0]),
+    "kitaplar": np.array([4.5, 3.5]), "masa": np.array([-1.0, 2.0]), "kalem": np.array([6.0, 0.5]),
+}
+
+
+def test_analoji_sorgusu():
+    q = dg.analoji_sorgusu(VEK["ev"], VEK["evler"], VEK["kitap"])
+    assert np.allclose(q, [5.0, 3.0])
+
+
+def test_analoji_girdileri_atmak():
+    _, atilmis = dg.analoji_coz("ev", "evler", "kitap", VEK, girdileri_at=True)
+    _, atilmamis = dg.analoji_coz("ev", "evler", "kitap", VEK, girdileri_at=False)
+    assert atilmis[0][0] == "kitaplar" and abs(atilmis[0][1] - 0.9927) < 5e-4
+    assert atilmamis[0][0] == "ev" and abs(atilmamis[0][1] - 0.9971) < 5e-4   # ilk sıra girdi
+    assert all(k not in ("ev", "evler", "kitap") for k, _ in atilmis)
+
+
+def test_siralar_esitlikte_ortalama():
+    assert np.allclose(dg.siralar([3.0, 7.0, 7.0, 1.0]), [3.0, 1.5, 1.5, 4.0])
+    assert np.allclose(dg.siralar([3.0, 7.0, 7.0, 1.0], buyukten_kucuge=False), [2.0, 3.5, 3.5, 1.0])
+
+
+def test_spearman_el_hesabi():
+    insan = [9.2, 7.0, 6.5, 6.0, 3.1, 0.4]
+    model = [0.88, 0.79, 0.81, 0.62, 0.46, 0.05]
+    rho, d, toplam = dg.spearman_d2(insan, model)
+    assert toplam == 2.0 and abs(rho - (1 - 12 / 210)) < 1e-12 and abs(rho - 0.9429) < 5e-5
+    assert abs(dg.spearman(insan, model) - rho) < 1e-12          # esitlik yokken iki yol aynı
+    assert abs(dg.spearman(insan, [10 * m for m in model]) - rho) < 1e-12   # ölçekten bağımsız
+    assert dg.spearman(insan, [-i for i in insan]) == -1.0
+
+
+def test_spearman_scipy_ile_capraz_kontrol():
+    try:
+        from scipy.stats import spearmanr
+    except ImportError:
+        return  # scipy yoksa bu kontrol atlanır
+    rng = np.random.default_rng(0)
+    for _ in range(20):
+        x = rng.integers(0, 6, size=12).astype(float)    # bol eşitlik içerir
+        y = rng.normal(size=12)
+        assert abs(dg.spearman(x, y) - spearmanr(x, y)[0]) < 1e-12
+    assert abs(dg.spearman([3, 7, 7, 1], [2, 9, 8, 1]) - spearmanr([3, 7, 7, 1], [2, 9, 8, 1])[0]) < 1e-12
+
+
+def test_cift_degerlendir_kapsam():
+    ciftler = [("ev", "evler"), ("ev", "yokkelime"), ("kitap", "kitaplar"), ("masa", "kalem")]
+    rho, kul, toplam, _ = dg.cift_degerlendir(ciftler, [8, 5, 9, 1], VEK.get)
+    assert (kul, toplam) == (3, 4)          # vektörü olmayan çift atlanır
+
+
+def test_gensim_analoji_capraz_kontrol():
+    try:
+        from gensim.models import KeyedVectors
+    except ImportError:
+        return
+    kv = KeyedVectors(vector_size=2)
+    kv.add_vectors(list(VEK), np.array(list(VEK.values())))
+    gs = kv.most_similar(positive=["evler", "kitap"], negative=["ev"], topn=10)
+    _, benim = dg.analoji_coz("ev", "evler", "kitap", VEK, girdileri_at=True, normalize=True)
+    assert [k for k, _ in gs] == [k for k, _ in benim]
+    for (k1, c1), (k2, c2) in zip(gs, benim):
+        assert abs(c1 - c2) < 1e-6, (k1, c1, c2)
 
 
 def test_gensim_ile_capraz_kontrol():
